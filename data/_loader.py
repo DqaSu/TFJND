@@ -1,6 +1,4 @@
 from torch.utils import data
-from torchvision import transforms
-from data_generator import MyDataSet
 
 
 def make_loader(dataset, batch_size, shuffle=True, num_workers=1, drop_last=False):

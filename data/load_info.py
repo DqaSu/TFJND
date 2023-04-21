@@ -1,17 +1,13 @@
 import os
 import numpy as np
-from torch.utils import data
-from PIL import Image, ImageFile
+import utils
 import random
 import scipy.io as scio
 from torchvision import transforms
-import torch
-
-crop_size = [256, 256]
 
 
 class LoadInfo():
-    def __init__(self, root_dir, db_dict, transform=None, enhance_level=5, db_key='CSIQ', data_enhance=True, tvr=0.9):
+    def __init__(self, root_dir, db_dict, transform=None, enhance_level=5, db_key='CSIQ', data_enhance=False, tvr=0.9):
         self.root_dir = root_dir
         self.db_key = db_key
         self.transform = transform
@@ -29,6 +25,9 @@ class LoadInfo():
         self.org_label = []
         self.load_info()
         self.info_train, self.info_val = self.divide_info_org()
+        if data_enhance:
+            self.info_train = self.data_aug(self.info_train)
+            self.info_val = self.data_aug(self.info_val)
 
     def load_info(self):
         info_path = os.path.join(self.root_dir, self.db, self.info_name)
@@ -42,16 +41,16 @@ class LoadInfo():
         if self.db == 'TID2013':
             for i in range(self.db_size):
                 if info['noise_idx'][i].item() not in range(14, 18):
-                    self.ref_name.append(win2linux(info['ref_name'][i].item().item()))
-                    self.dst_name.append(win2linux(info['dst_name'][i].item().item()))
+                    self.ref_name.append(utils.win2linux(info['ref_name'][i].item().item()))
+                    self.dst_name.append(utils.win2linux(info['dst_name'][i].item().item()))
                     self.label.append(info['mos'][i].item())  # dmos  1
                     self.org_label.append(int(info['org_label'][i].item()))
                     self.db_size = len(self.label)
         else:
             for i in range(self.db_size):
                 if info['noise_idx'][i].item() != 6:
-                    self.ref_name.append(win2linux(info['ref_name'][0][i].item()))
-                    dst_name = win2linux(info['dst_name'][0][i].item())
+                    self.ref_name.append(utils.win2linux(info['ref_name'][0][i].item()))
+                    dst_name = utils.win2linux(info['dst_name'][0][i].item())
                     if self.db == 'CSIQ':
                         iname = dst_name.split('/')[-1]
                     elif self.db == 'LIVE':
@@ -83,7 +82,7 @@ class LoadInfo():
         print('Dataset with size [{}] has been loaded'.format(self.db_size))
 
     def divide_info_org(self):
-        # orgN = self.org_label[-1]
+        # divide dataset according to reference image
         orgN = np.max(self.org_label)
         orgNv = int(np.ceil(orgN * (1 - self.tvr)))
         orgset = [i for i in range(1, orgN+1)]
@@ -138,6 +137,7 @@ class LoadInfo():
         return info_train, info_val
 
     def divide_info(self):
+        # divide dataset without considering reference image
         _info = {}
         _info['ref_name'] = self.ref_name
         _info['dst_name'] = self.dst_name
@@ -230,77 +230,3 @@ class LoadInfo():
 
     def get_info_val(self):
         return self.info_val
-
-
-class MyDataSet(data.Dataset):
-    # def __init__(self, info_file, root_dir, transform):
-    def __init__(self, info):
-
-        super(MyDataSet, self).__init__()
-
-        self.root_dir = info['root_dir']
-        self.transform = info['transform']
-        self.db = info['db']
-        self.ref_name = info['ref_name']
-        self.dst_name = info['dst_name']
-        self.label = info['label']
-        self.db_size = len(info['label'])
-        self.rand_crop = transforms.RandomCrop(crop_size)
-        self.v_flip = transforms.RandomHorizontalFlip()
-        self.h_flip = transforms.RandomVerticalFlip()
-        self.patch_num = 4
-
-    def __len__(self):
-        return self.db_size
-
-    def __getitem__(self, item):
-        # Allow to truncate images with huge size
-        ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-        ref_path = os.path.join(self.root_dir, self.db, self.ref_name[item])
-        dst_path = os.path.join(self.root_dir, self.db, self.dst_name[item])
-
-        ref_img = Image.open(ref_path)
-        dst_img = scio.loadmat(dst_path)['mean_square_error']
-        # dst_img = Image.open(dst_path)
-        label = self.label[item]
-
-        # without crop
-        """
-        if self.transform is not None:
-            ref_img = self.transform(ref_img)
-            dst_img = self.transform(dst_img)
-        return ref_img, dst_img, label"""
-
-        # crop
-        ref_img = self.transform(ref_img)
-        dst_img = self.transform(dst_img)
-
-        seed = random.randint(1, 10000)
-        ref_patches = []
-        dst_patches = []
-
-        if self.transform is not None:
-            random.seed(seed)
-            for _ in range(self.patch_num):
-                ref_patches.append(self.h_flip(self.v_flip(self.rand_crop(ref_img))))
-            random.seed(seed)
-            for _ in range(self.patch_num):
-                dst_patches.append(self.h_flip(self.v_flip(self.rand_crop(dst_img))))
-
-        ref_patches = torch.cat(tuple(ref_patches), 0)
-        dst_patches = torch.cat(tuple(dst_patches), 0)
-        return ref_patches, dst_patches, label
-
-
-def win2linux(win_path):
-    return win_path.replace('\\', '/')
-
-
-
-
-
-
-
-
-

@@ -1,10 +1,7 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2, 3"
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import torch
 import numpy as np
-import argparse
+import configs.config_infer as config
 import scipy.io as scio
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -19,29 +16,6 @@ from tqdm import tqdm
 
 DB = ['csiq', 'live']
 transform = transforms.ToTensor()
-
-
-def predictor_ori(img_path, model, device='gpu', patch_size=176, overlapping=32):
-    img = Image.open(img_path)
-    [W, H] = img.size
-    patches = utils.convert_to_patches(img, patch_size, overlapping)
-    patches = np.stack(patches, axis=0)
-    patches_tensor = torch.FloatTensor(patches)
-
-    if len(patches_tensor.shape) < 4:
-        # for the situation that input image can not be divided into patches
-        patches_tensor = patches_tensor.unsqueeze(0)
-
-    with torch.no_grad():
-        if device == 'cpu':
-            preds = model.forward(patches_tensor).squeeze(1)
-        elif device == 'gpu':
-            preds = model.forward(patches_tensor.cuda()).squeeze(1).cpu()
-        else:
-            raise AssertionError('device should be either [cpu] or [gpu], but [{}] is received'.format(device))
-
-    jnd_profile = np.array(utils.reconstruct2img(preds, H, W, patch_size, overlapping), dtype=object)
-    return jnd_profile
 
 
 def predictor(img_path, model, device='gpu'):
@@ -98,23 +72,12 @@ def overlap_crop_forward(model, x, shave=10, min_size=100000):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Just noticeable difference estimation.')
-    parser.add_argument('-image_pth',
-                        type=str,
-                        default="/mnt/diskplus/myw/database/CSIQ/src_imgs",
-                        help="Path of images to be processed.")
-    parser.add_argument('-model_pth',
-                        type=str,
-                        default="/mnt/diskplus/myw/TFJND/results/csiq/epoch-last.pth",
-                        help="Path of the pre-trained JND predictor")
-    parser.add_argument('-device',
-                        type=str,
-                        default='gpu')
+    opt = config.get_config()
 
-    opt = parser.parse_args()
     image_pth = opt.image_pth
     model_pth = opt.model_pth
     device = opt.device
+
     save_pth = ''
 
     for db in DB:
@@ -125,6 +88,8 @@ if __name__ == '__main__':
             break
 
     model = make_rdn(out_dim=1, G0=64, RDNkSize=3, RDNconfig='D', keep_prob=0.1)
+    if opt.is_print_network:
+        utils.print_network(model, 'RDN')
 
     if os.path.exists(model_pth):
         sv_file = torch.load(model_pth)
@@ -133,10 +98,21 @@ if __name__ == '__main__':
         raise AssertionError('sv_file [{}] is not found'.format(model_pth))
 
     if device == 'gpu':
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        if opt.multiple_gpu:
+            os.environ["CUDA_VISIBLE_DEVICES"] = opt.gpu_ids
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = opt.gpu_id
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
         model = model.cuda()
-        model = nn.parallel.DataParallel(model)
+
+        if opt.parallel:
+            model = nn.parallel.DataParallel(model)
+
     elif device == 'cpu':
         model = model
+
     else:
         raise AssertionError('device should be either [cpu] or [gpu], but [{}] is received'.format(device))
 
